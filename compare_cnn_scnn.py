@@ -3,42 +3,42 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import argparse
-from hadamard_transform import HadamardCompression
-from torchvision.datasets import CIFAR10
+import wandb
+
 from torchvision import transforms
 from torch.utils.data import DataLoader
+
+from hadamard_transform import HadamardCompression
 from cnn import CIFARCNN
 from scnn import CIFARSCNN
-import wandb
+from kaggle_dataset import CIFARKaggle, CIFARTest
+
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=str, required=True)
-    parser.add_argument("--num_steps", type=int, default=25)
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--name", type=str, default="SNN")
-    parser.add_argument("--num_epoches", type=int, default=256)
-    
-    
+    parser.add_argument("--num_steps", type=int, default=25)
+    parser.add_argument("--name", type=str, default="SCNN")
+    parser.add_argument("--epochs", type=int, default=200)
     return parser.parse_args()
+
 
 def main():
     args = get_args()
-    root = args.root
-    num_steps = args.num_steps
-    surrogate = "fast_sigmoid"
+
+    torch.backends.cudnn.benchmark = True
+
+    device0 = torch.device("cuda:0")
+    device1 = torch.device("cuda:1")
+
     wandb.init(
-    project="SCNN",
-    name=args.name,
-     config={
-        "keep_ratio": 0.10,
-        "num_steps":num_steps,
-        "surrogate": surrogate,
-        "batch_size": args.batch_size,
-        "epoches": args.num_epoches
-     }
+        project="SCNN",
+        name=args.name,
+        config=vars(args)
     )
-    train_transform = transforms.Compose([
+
+    transform = transforms.Compose([
         HadamardCompression(keep_ratio=0.10),
         transforms.ToTensor(),
         transforms.Normalize(
@@ -47,27 +47,15 @@ def main():
         )
     ])
 
-    test_transform = transforms.Compose([
-        HadamardCompression(keep_ratio=0.10),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=(0.4914, 0.4822, 0.4465),
-            std=(0.2023, 0.1994, 0.2010)
-        )
-    ])
-
-    trainset = CIFAR10(
-        root=root,
-        train=True,
-        download=True,
-        transform=train_transform
+    trainset = CIFARKaggle(
+        img_dir=f"{args.root}/train",
+        labels_csv=f"{args.root}/trainLabels.csv",
+        transform=transform
     )
 
-    testset = CIFAR10(
-        root=root,
-        train=False,
-        download=True,
-        transform=test_transform
+    testset = CIFARTest(
+        img_dir=f"{args.root}/test",
+        transform=transform
     )
 
     trainloader = DataLoader(
@@ -86,65 +74,50 @@ def main():
         pin_memory=True
     )
 
-    cnn = CIFARCNN(10).cuda(0)
-    scnn = CIFARSCNN(10,num_steps).cuda(1)
+    cnn = CIFARCNN(10).to(device0)
+    scnn = CIFARSCNN(10, args.num_steps).to(device1)
+
     criterion = nn.CrossEntropyLoss()
-    cnn_optimizer = optim.Adam(
-        cnn.parameters(),
-        lr=1e-3
-    )
-    scnn_optimizer = optim.Adam(
-        scnn.parameters(),
-        lr=1e-3
-    )
-    cnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        cnn_optimizer,
-        T_max=250
-    )
-    scnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        scnn_optimizer,
-        T_max=250
-    )
+
+    cnn_optimizer = optim.Adam(cnn.parameters(), lr=1e-3)
+    scnn_optimizer = optim.Adam(scnn.parameters(), lr=1e-3)
+
+    cnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(cnn_optimizer, T_max=args.epochs)
+    scnn_scheduler = optim.lr_scheduler.CosineAnnealingLR(scnn_optimizer, T_max=args.epochs)
+
     best_cnn_acc = 0.0
     best_scnn_acc = 0.0
-    num_epochs = args.num_epoches
 
-    for epoch in range(num_epochs):
+    for epoch in range(args.epochs):
 
         cnn.train()
         scnn.train()
 
-        cnn_train_loss = 0.0
-        scnn_train_loss = 0.0
+        cnn_loss_sum = 0.0
+        scnn_loss_sum = 0.0
 
         cnn_correct = 0
         scnn_correct = 0
-
-        train_total = 0
+        total = 0
 
         for images, labels in trainloader:
 
-            cnn_images = images.cuda(0, non_blocking=True)
-            cnn_labels = labels.cuda(0, non_blocking=True)
+            images = images
 
-            scnn_images = images.cuda(1, non_blocking=True)
-            scnn_labels = labels.cuda(1, non_blocking=True)
+            cnn_images = images.to(device0, non_blocking=True)
+            scnn_images = images.to(device1, non_blocking=True)
 
-            cnn_optimizer.zero_grad()
-            scnn_optimizer.zero_grad()
+            labels0 = labels.to(device0, non_blocking=True)
+            labels1 = labels.to(device1, non_blocking=True)
+
+            cnn_optimizer.zero_grad(set_to_none=True)
+            scnn_optimizer.zero_grad(set_to_none=True)
 
             cnn_outputs = cnn(cnn_images)
             scnn_outputs = scnn(scnn_images)
 
-            cnn_loss = criterion(
-                cnn_outputs,
-                cnn_labels
-            )
-
-            scnn_loss = criterion(
-                scnn_outputs,
-                scnn_labels
-            )
+            cnn_loss = criterion(cnn_outputs, labels0)
+            scnn_loss = criterion(scnn_outputs, labels1)
 
             cnn_loss.backward()
             scnn_loss.backward()
@@ -152,22 +125,16 @@ def main():
             cnn_optimizer.step()
             scnn_optimizer.step()
 
-            cnn_train_loss += cnn_loss.item()
-            scnn_train_loss += scnn_loss.item()
+            cnn_loss_sum += cnn_loss.item()
+            scnn_loss_sum += scnn_loss.item()
 
-            cnn_preds = cnn_outputs.argmax(dim=1)
-            scnn_preds = scnn_outputs.argmax(dim=1)
+            cnn_correct += (cnn_outputs.argmax(1) == labels0).sum().item()
+            scnn_correct += (scnn_outputs.argmax(1) == labels1).sum().item()
 
-            cnn_correct += (cnn_preds == cnn_labels).sum().item()
-            scnn_correct += (scnn_preds == scnn_labels).sum().item()
+            total += labels.size(0)
 
-            train_total += labels.size(0)
-
-        cnn_train_loss /= len(trainloader)
-        scnn_train_loss /= len(trainloader)
-
-        cnn_train_acc = 100.0 * cnn_correct / train_total
-        scnn_train_acc = 100.0 * scnn_correct / train_total
+        cnn.train_acc = 100 * cnn_correct / total
+        scnn.train_acc = 100 * scnn_correct / total
 
         cnn.eval()
         scnn.eval()
@@ -177,102 +144,65 @@ def main():
 
         cnn_val_correct = 0
         scnn_val_correct = 0
-
         val_total = 0
 
         with torch.no_grad():
-
             for images, labels in testloader:
 
-                cnn_images = images.cuda(0, non_blocking=True)
-                cnn_labels = labels.cuda(0, non_blocking=True)
+                cnn_images = images.to(device0, non_blocking=True)
+                scnn_images = images.to(device1, non_blocking=True)
 
-                scnn_images = images.cuda(1, non_blocking=True)
-                scnn_labels = labels.cuda(1, non_blocking=True)
+                labels0 = labels.to(device0, non_blocking=True)
+                labels1 = labels.to(device1, non_blocking=True)
 
                 cnn_outputs = cnn(cnn_images)
                 scnn_outputs = scnn(scnn_images)
 
-                cnn_loss = criterion(
-                    cnn_outputs,
-                    cnn_labels
-                )
-
-                scnn_loss = criterion(
-                    scnn_outputs,
-                    scnn_labels
-                )
+                cnn_loss = criterion(cnn_outputs, labels0)
+                scnn_loss = criterion(scnn_outputs, labels1)
 
                 cnn_val_loss += cnn_loss.item()
                 scnn_val_loss += scnn_loss.item()
 
-                cnn_preds = cnn_outputs.argmax(dim=1)
-                scnn_preds = scnn_outputs.argmax(dim=1)
-
-                cnn_val_correct += (cnn_preds == cnn_labels).sum().item()
-                scnn_val_correct += (scnn_preds == scnn_labels).sum().item()
+                cnn_val_correct += (cnn_outputs.argmax(1) == labels0).sum().item()
+                scnn_val_correct += (scnn_outputs.argmax(1) == labels1).sum().item()
 
                 val_total += labels.size(0)
 
-        cnn_val_loss /= len(testloader)
-        scnn_val_loss /= len(testloader)
-
-        cnn_val_acc = 100.0 * cnn_val_correct / val_total
-        scnn_val_acc = 100.0 * scnn_val_correct / val_total
+        cnn_val_acc = 100 * cnn_val_correct / val_total
+        scnn_val_acc = 100 * scnn_val_correct / val_total
 
         cnn_scheduler.step()
         scnn_scheduler.step()
 
         if cnn_val_acc > best_cnn_acc:
             best_cnn_acc = cnn_val_acc
-
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": cnn.state_dict(),
-                    "optimizer_state_dict": cnn_optimizer.state_dict(),
-                    "accuracy": cnn_val_acc
-                },
-                "best_cnn.pth"
-            )
+            torch.save(cnn.state_dict(), "best_cnn.pth")
 
         if scnn_val_acc > best_scnn_acc:
             best_scnn_acc = scnn_val_acc
+            torch.save(scnn.state_dict(), "best_scnn.pth")
 
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": scnn.state_dict(),
-                    "optimizer_state_dict": scnn_optimizer.state_dict(),
-                    "accuracy": scnn_val_acc
-                },
-                "best_scnn.pth"
-            )
-
-        print(
-            f"Epoch [{epoch+1:03d}/{num_epochs}] | "
-            f"CNN Train Loss: {cnn_train_loss:.4f} | "
-            f"CNN Train Acc: {cnn_train_acc:.2f}% | "
-            f"CNN Val Loss: {cnn_val_loss:.4f} | "
-            f"CNN Val Acc: {cnn_val_acc:.2f}% | "
-            f"SCNN Train Loss: {scnn_train_loss:.4f} | "
-            f"SCNN Train Acc: {scnn_train_acc:.2f}% | "
-            f"SCNN Val Loss: {scnn_val_loss:.4f} | "
-            f"SCNN Val Acc: {scnn_val_acc:.2f}%"
-        )
         wandb.log({
-            "cnn/train_loss": cnn_train_loss,
-            "cnn/train_acc": cnn_train_acc,
-            "cnn/val_loss": cnn_val_loss,
+            "cnn/train_loss": cnn_loss_sum / len(trainloader),
+            "cnn/train_acc": cnn.train_acc,
+            "cnn/val_loss": cnn_val_loss / len(testloader),
             "cnn/val_acc": cnn_val_acc,
 
-            "scnn/train_loss": scnn_train_loss,
-            "scnn/train_acc": scnn_train_acc,
-            "scnn/val_loss": scnn_val_loss,
-            "scnn/val_acc": scnn_val_acc,
+            "scnn/train_loss": scnn_loss_sum / len(trainloader),
+            "scnn/train_acc": scnn.train_acc,
+            "scnn/val_loss": scnn_val_loss / len(testloader),
+            "scnn/val_acc": scnn_val_acc
         })
-    print(f"Best CNN Accuracy: {best_cnn_acc:.2f}%")
-    print(f"Best SCNN Accuracy: {best_scnn_acc:.2f}%")
+
+        print(
+            f"Epoch {epoch+1}/{args.epochs} | "
+            f"CNN acc {cnn_val_acc:.2f}% | "
+            f"SCNN acc {scnn_val_acc:.2f}%"
+        )
+
+    print("Best CNN:", best_cnn_acc)
+    print("Best SCNN:", best_scnn_acc)
 
 
 if __name__ == "__main__":
