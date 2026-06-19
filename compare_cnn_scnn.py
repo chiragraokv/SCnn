@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+import argparse
 from hadamard_transform import HadamardCompression
 from torchvision.datasets import CIFAR10
 from torchvision import transforms
@@ -10,12 +10,32 @@ from torch.utils.data import DataLoader
 from cnn import CIFARCNN
 from scnn import CIFARSCNN
 import wandb
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=str, required=True)
+    parser.add_argument("--num_steps", type=int, default=25)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--name", type=str, default="SNN")
+    parser.add_argument("--num_epoches", type=int, default=256)
+    
+    
+    return parser.parse_args()
+
 def main():
+    args = get_args()
+    root = args.root
+    num_steps = args.num_steps
+    surrogate = "fast_sigmoid"
     wandb.init(
     project="SCNN",
-    name="CNN vs SCNN",
+    name=args.name,
      config={
-        "keep_ratio": 0.10
+        "keep_ratio": 0.10,
+        "num_steps":num_steps,
+        "surrogate": surrogate,
+        "batch_size": args.batch_size,
+        "epoches": args.num_epoches
      }
     )
     train_transform = transforms.Compose([
@@ -37,14 +57,14 @@ def main():
     ])
 
     trainset = CIFAR10(
-        root="./data",
+        root=root,
         train=True,
         download=True,
         transform=train_transform
     )
 
     testset = CIFAR10(
-        root="./data",
+        root=root,
         train=False,
         download=True,
         transform=test_transform
@@ -52,7 +72,7 @@ def main():
 
     trainloader = DataLoader(
         trainset,
-        batch_size=128,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True
@@ -60,14 +80,14 @@ def main():
 
     testloader = DataLoader(
         testset,
-        batch_size=128,
+        batch_size=args.batch_size,
         shuffle=False,
         num_workers=4,
         pin_memory=True
     )
 
-    cnn = CIFARCNN().cuda(0)
-    scnn = CIFARSCNN().cuda(1)
+    cnn = CIFARCNN(10).cuda(0)
+    scnn = CIFARSCNN(10,num_steps).cuda(1)
     criterion = nn.CrossEntropyLoss()
     cnn_optimizer = optim.Adam(
         cnn.parameters(),
@@ -87,7 +107,7 @@ def main():
     )
     best_cnn_acc = 0.0
     best_scnn_acc = 0.0
-    num_epochs = 250
+    num_epochs = args.num_epoches
 
     for epoch in range(num_epochs):
 
