@@ -253,3 +253,7 @@ def main():
         })
     print(f"Best CNN Accuracy: {best_cnn_acc:.2f}%")
     print(f"Best SCNN Accuracy: {best_scnn_acc:.2f}%")
+
+
+if __name__ == "__main__":
+    main()
