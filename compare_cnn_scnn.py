@@ -18,7 +18,7 @@ def get_args():
     parser.add_argument("--root", type=str, default="./data")
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_steps", type=int, default=25)
-    parser.add_argument("--name", type=str, default="SCNN")
+    parser.add_argument("--name", type=str, default="SCNN vs CNN")
     parser.add_argument("--epochs", type=int, default=200)
     return parser.parse_args()
 
@@ -76,7 +76,7 @@ def main():
         pin_memory=True
     )
 
-    cnn = CIFARCNN(10).to(device0)
+    cnn = CIFARCNN().to(device0)
     scnn = CIFARSCNN(10, args.num_steps).to(device1)
 
     criterion = nn.CrossEntropyLoss()
