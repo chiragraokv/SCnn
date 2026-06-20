@@ -8,7 +8,7 @@ class CIFARSCNN(nn.Module):
     def __init__(self,classes, num_steps=25,s_grad = surrogate.fast_sigmoid()):
         super().__init__()
 
-        spike_grad = self.s_grad
+        spike_grad = s_grad
 
         self.num_steps = num_steps
 
