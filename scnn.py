@@ -11,6 +11,7 @@ class CIFARSCNN(nn.Module):
         spike_grad = s_grad
 
         self.num_steps = num_steps
+        self.classes = classes
 
         # Block 1
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
