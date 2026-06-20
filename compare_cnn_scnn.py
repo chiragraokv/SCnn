@@ -11,12 +11,11 @@ from torch.utils.data import DataLoader
 from hadamard_transform import HadamardCompression
 from cnn import CIFARCNN
 from scnn import CIFARSCNN
-from kaggle_dataset import CIFARKaggle, CIFARTest
-
+from torchvision.datasets import CIFAR10
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=str, required=True)
+    parser.add_argument("--root", type=str, default="./data")
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--num_steps", type=int, default=25)
     parser.add_argument("--name", type=str, default="SCNN")
@@ -47,14 +46,17 @@ def main():
         )
     ])
 
-    trainset = CIFARKaggle(
-        img_dir=f"{args.root}/train",
-        labels_csv=f"{args.root}/trainLabels.csv",
+    trainset = CIFAR10(
+        root="./data",
+        train=True,
+        download=True,
         transform=transform
     )
 
-    testset = CIFARTest(
-        img_dir=f"{args.root}/test",
+    testset = CIFAR10(
+        root="./data",
+        train=False,
+        download=True,
         transform=transform
     )
 
