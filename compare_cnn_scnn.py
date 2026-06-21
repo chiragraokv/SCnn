@@ -6,7 +6,8 @@ import argparse
 import wandb
 
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+import torchvision.datasets.utils as utils
 
 from hadamard_transform import HadamardCompression
 from cnn import CIFARCNN
@@ -16,12 +17,27 @@ from torchvision.datasets import CIFAR10
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=str, default="./data")
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--num_steps", type=int, default=25)
     parser.add_argument("--name", type=str, default="SCNN vs CNN")
     parser.add_argument("--epochs", type=int, default=200)
     return parser.parse_args()
 
+# class MockCIFAR10(Dataset):
+#     def __init__(self, num_samples=16, transform=None): 
+#         # Generate minimal random images (16 samples is plenty for a logic test)
+#         self.data = np.random.randint(0, 255, size=(num_samples, 32, 32, 3), dtype=np.uint8)
+#         self.targets = np.random.randint(0, 10, size=(num_samples,)).tolist()
+#         self.transform = transform
+
+#     def __len__(self):
+#         return len(self.data)
+
+#     def __getitem__(self, index):
+#         img, target = self.data[index], self.targets[index]
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         return img, target
 
 def main():
     args = get_args()
@@ -30,12 +46,6 @@ def main():
 
     device0 = torch.device("cuda:0")
     device1 = torch.device("cuda:1")
-
-    wandb.init(
-        project="SCNN",
-        name=args.name,
-        config=vars(args)
-    )
 
     transform = transforms.Compose([
         HadamardCompression(keep_ratio=0.10),
@@ -59,7 +69,12 @@ def main():
         download=True,
         transform=transform
     )
-
+    # print("🤖 Generating synthetic mock CIFAR dataset...")
+    # # Creates 128 local images in RAM instantly—zero download wait
+    # trainset = MockCIFAR10(num_samples=60, transform=transform)
+    # testset = MockCIFAR10(num_samples=64, transform=transform)
+    # print("✅ Synthetic dataset injected.")
+    # torch.backends.cudnn.benchmark = False
     trainloader = DataLoader(
         trainset,
         batch_size=args.batch_size,
@@ -74,6 +89,11 @@ def main():
         shuffle=False,
         num_workers=4,
         pin_memory=True
+    )
+    wandb.init(
+        project="SCNN",
+        name=args.name,
+        config=vars(args),
     )
 
     cnn = CIFARCNN().to(device0)

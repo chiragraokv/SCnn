@@ -97,4 +97,6 @@ class CIFARSCNN(nn.Module):
 
             spk_out.append(spk6)
 
-        return torch.stack(spk_out)
+        stacked_spikes = torch.stack(spk_out)
+    
+        return stacked_spikes.sum(dim=0)
